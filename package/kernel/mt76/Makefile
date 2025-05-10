@@ -612,7 +612,7 @@ define KernelPackage/mt7916-firmware/install
 		./firmware/mt7916_wa.bin \
 		./firmware/mt7916_wm.bin \
 		./firmware/mt7916_rom_patch.bin \
-		./firmware/mt7915e_rf.bin \
+		./firmware/mt7916_eeprom.bin \
 		$(1)/lib/firmware/mediatek
 endef
 
