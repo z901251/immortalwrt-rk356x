@@ -238,6 +238,69 @@
 #define RTL8367S_SDS_INDACS_DATA_REG           0x6602
 #define RTL8367S_CPU_PORT_NUM       6
 
+//led 
+#define    RTL8367S_REG_LED_ACTIVE_LOW_CFG0    0x1b0e
+#define    RTL8367S_LED_ACTIVE_LOW_CFG0_DUMMY_15_OFFSET    15
+#define    RTL8367S_LED_ACTIVE_LOW_CFG0_DUMMY_15_MASK    0x8000
+#define    RTL8367S_PORT3_LED_ACTIVE_LOW_OFFSET    12
+#define    RTL8367S_PORT3_LED_ACTIVE_LOW_MASK    0x7000
+#define    RTL8367S_LED_ACTIVE_LOW_CFG0_DUMMY_11_OFFSET    11
+#define    RTL8367S_LED_ACTIVE_LOW_CFG0_DUMMY_11_MASK    0x800
+#define    RTL8367S_PORT2_LED_ACTIVE_LOW_OFFSET    8
+#define    RTL8367S_PORT2_LED_ACTIVE_LOW_MASK    0x700
+#define    RTL8367S_DUMMY_7_OFFSET    7
+#define    RTL8367S_DUMMY_7_MASK    0x80
+#define    RTL8367S_PORT1_LED_ACTIVE_LOW_OFFSET    4
+#define    RTL8367S_PORT1_LED_ACTIVE_LOW_MASK    0x70
+#define    RTL8367S_DUMMY_3_OFFSET    3
+#define    RTL8367S_DUMMY_3_MASK    0x8
+#define    RTL8367S_PORT0_LED_ACTIVE_LOW_OFFSET    0
+#define    RTL8367S_PORT0_LED_ACTIVE_LOW_MASK    0x7
+
+#define    RTL8367S_REG_LED_ACTIVE_LOW_CFG1    0x1b0f
+#define    RTL8367S_LED_ACTIVE_LOW_CFG1_DUMMY_15_OFFSET    15
+#define    RTL8367S_LED_ACTIVE_LOW_CFG1_DUMMY_15_MASK    0x8000
+#define    RTL8367S_PORT7_LED_ACTIVE_LOW_OFFSET    12
+#define    RTL8367S_PORT7_LED_ACTIVE_LOW_MASK    0x7000
+#define    RTL8367S_LED_ACTIVE_LOW_CFG1_DUMMY_11_OFFSET    11
+#define    RTL8367S_LED_ACTIVE_LOW_CFG1_DUMMY_11_MASK    0x800
+#define    RTL8367S_PORT6_LED_ACTIVE_LOW_OFFSET    8
+#define    RTL8367S_PORT6_LED_ACTIVE_LOW_MASK    0x700
+#define    RTL8367S_DUMMY_1b0f_b_OFFSET    7
+#define    RTL8367S_DUMMY_1b0f_b_MASK    0x80
+#define    RTL8367S_PORT5_LED_ACTIVE_LOW_OFFSET    4
+#define    RTL8367S_PORT5_LED_ACTIVE_LOW_MASK    0x70
+#define    RTL8367S_DUMMY_1b0f_a_OFFSET    3
+#define    RTL8367S_DUMMY_1b0f_a_MASK    0x8
+#define    RTL8367S_PORT4_LED_ACTIVE_LOW_OFFSET    0
+#define    RTL8367S_PORT4_LED_ACTIVE_LOW_MASK    0x7
+
+#define    RTL8367S_REG_LED_ACTIVE_LOW_CFG2    0x1b10
+#define    RTL8367S_DUMMY_1b10_b_OFFSET    7
+#define    RTL8367S_DUMMY_1b10_b_MASK    0xFF80
+#define    RTL8367S_PORT9_LED_ACTIVE_LOW_OFFSET    4
+#define    RTL8367S_PORT9_LED_ACTIVE_LOW_MASK    0x70
+#define    RTL8367S_DUMMY_1b10_a_OFFSET    3
+#define    RTL8367S_DUMMY_1b10_a_MASK    0x8
+#define    RTL8367S_PORT8_LED_ACTIVE_LOW_OFFSET    0
+#define    RTL8367S_PORT8_LED_ACTIVE_LOW_MASK    0x7
+
+#define RTL8367S_PORT_0                  BIT(0)
+#define RTL8367S_PORT_1                  BIT(1)
+#define RTL8367S_PORT_2                  BIT(2)
+#define RTL8367S_PORT_3                  BIT(3)
+#define RTL8367S_PORT_4                  BIT(4)
+#define RTL8367S_PORT_5                  BIT(5)
+#define RTL8367S_PORT_6                  BIT(6)
+#define RTL8367S_PORT_7                  BIT(7)
+#define RTL8367S_PORT_E1                 BIT(8)  /* external port 1 */
+#define RTL8367S_PORT_E0                 BIT(9)  /* external port 0 */
+
+#define RTL8367S_PORTS_ALL                                       \
+        (RTL8367S_PORT_0 | RTL8367S_PORT_1 | RTL8367S_PORT_2 |     \
+         RTL8367S_PORT_3 | RTL8367S_PORT_4 | RTL8367S_PORT_5 |     \
+         RTL8367S_PORT_6 | RTL8367S_PORT_7 | RTL8367S_PORT_E1 |    \
+         RTL8367S_PORT_E0)
 //-------------------RTL8367S--------------------------------------
 
 
@@ -1124,6 +1187,81 @@ static int rtl8367b_extif_init_of(struct rtl8366_smi *smi,int id,
 }
 #endif
 
+/* RTL8367S set led mode */
+static int rtl8367S_led_group_set_ports(struct rtl8366_smi *smi,
+                                       unsigned int group, u16 port_mask)
+{
+        u32 reg;
+        u32 s;
+        int err;
+
+        port_mask &= 0xff;
+        s = (group % 2) * 8;
+        reg = 0x1b24 + (group / 2);
+
+        REG_RMW(smi, reg, (0xff << s), port_mask << s);
+
+        return 0;
+}
+
+static int rtl8367S_led_group_set_mode(struct rtl8366_smi *smi,
+                                      unsigned int mode)
+{
+        u16 mask;
+        u16 set;
+        int err;
+
+        mode &= 0x3;
+
+        mask = (0x3 << 12) | BIT(14);
+        set = (mode << 12) | BIT(14);
+
+        REG_RMW(smi, 0x1b03, mask, set);
+
+        return 0;
+}
+
+static int rtl8367S_led_op_select_parallel(struct rtl8366_smi *smi)
+{
+        int err;
+
+        //REG_WR(smi, 0x1b00, 0x1472);
+	REG_RMW(smi, 0x1b00,BIT(0),0x0); //LEDOP_PARALLEL
+	REG_RMW(smi, 0x1b26, BIT(0),0x0); //Disable serial CLK mode
+	REG_RMW(smi, 0x1b26, BIT(1),0x0); //Disable serial DATA mode
+        return 0;
+}
+
+static int rtl8367S_led_blinkrate_set(struct rtl8366_smi *smi, unsigned int rate)
+{
+        u16 mask;
+        u16 set;
+        int err;
+
+        mask = 0x7 << 1;
+        set = (rate & 0x7) << 1;
+        REG_RMW(smi, 0x1b02, mask, set);
+
+        return 0;
+}
+
+
+static int rtl8367S_led_group_set_config(struct rtl8366_smi *smi,
+                                        unsigned int led, unsigned int cfg)
+{
+        u16 mask;
+        u16 set;
+        int err;
+
+        mask = (0xf << (led * 4)) | BIT(14);
+        set = (cfg & 0xf) << (led * 4);
+
+        REG_RMW(smi, 0x1b03, mask, set);
+        return 0;
+}
+
+/* RTL8367S set led mode */
+
 static int rtl8367b_setup(struct rtl8366_smi *smi)
 {
 	struct rtl8367_platform_data *pdata;
@@ -1149,6 +1287,60 @@ static int rtl8367b_setup(struct rtl8366_smi *smi)
 		err = rtl8367b_extif_init_of(smi, 2, "realtek,extif2"); //port 7
 		if (err)
 			return err;
+	
+		if (of_device_is_compatible(smi->parent->of_node, "realtek,rtl8367s"))
+		{
+		//高低点平接反了需要设置
+		  /*u32 regValue;
+		  REG_RD(smi,RTL8367S_REG_LED_ACTIVE_LOW_CFG0, &regValue);
+		  dev_info(smi->parent, "CFG0 is %04x\n",regValue);
+		  regValue &= ~(RTL8367S_PORT0_LED_ACTIVE_LOW_MASK | RTL8367S_PORT1_LED_ACTIVE_LOW_MASK | 
+				RTL8367S_PORT2_LED_ACTIVE_LOW_MASK | RTL8367S_PORT3_LED_ACTIVE_LOW_MASK);
+		  REG_WR(smi, RTL8367S_REG_LED_ACTIVE_LOW_CFG0, regValue);
+		  REG_RD(smi, RTL8367S_REG_LED_ACTIVE_LOW_CFG0, &regValue);
+		  dev_info(smi->parent, "Updated CFG0: 0x%04x\n", regValue);*/
+
+
+        	  /* setup LEDs */
+      		  err = rtl8367S_led_group_set_ports(smi, 0, RTL8367S_PORTS_ALL); //初始化端口led
+
+        	  err = rtl8367S_led_group_set_mode(smi, 0);			//设置模式为0
+		  /*set  	led0    led1   led2
+		  mode 0	00   0010  0011  0100
+		  mode 1	01   0110  0111  1000
+		  mode 2	10   0001  0110  1001
+		  mode 3	11   1000  0110  0111*/
+        	  err = rtl8367S_led_op_select_parallel(smi);
+		  //1:scan mode 1471, 2:parallel mode 1472, 3:mdx mode (serial mode) 14F7
+
+        	  err = rtl8367S_led_blinkrate_set(smi, 1);
+		  //blinkRate | Support 6 blink rates LED blink rate at 43ms, 84ms, 120ms, 170ms, 340ms and 670ms
+		  //43ms 0,84ms 1 ,120ms 2,170ms 3, 340ms 4,670ms 5
+
+        	  err = rtl8367S_led_group_set_config(smi, 0, 2);
+		  //set led0 mode 2
+		  err = rtl8367S_led_group_set_config(smi, 1, 2);
+		  //set led1 mode 2
+		  err = rtl8367S_led_group_set_config(smi, 2, 2);
+		  //set led2 mode 
+		  /*  0000        LED_Off                
+		      0001        Dup/Col                
+		      0010        Link/Act               
+		      0011        Spd1000                
+		      0100        Spd100                 
+		      0101        Spd10                  
+	  	      0110        Spd1000/Act            
+		      0111        Spd100/Act             
+		      1000        Spd10/Act              
+		      1001        Spd100 (10)/Act        
+		      1010        Fiber                  
+		      1011        Fault                  
+		      1100        Link/Rx                
+		      1101        Link/Tx                
+		      1110        Master                 
+		      1111        Act                    
+		 */
+		}	  
 
 	} else {
 		err = rtl8367b_extif_init(smi, 0, pdata->extif0_cfg);
