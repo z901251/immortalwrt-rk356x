@@ -694,7 +694,7 @@
 		reset-gpios = <&gpio0 RK_PC3 GPIO_ACTIVE_HIGH>;
 		num-lanes = <0x1>; /*可能不生效,但是拆分需要打补丁,如果是吧,打补丁*/
 		pinctrl-0 = <&pcie30x1_reset_h>;
-		status = "status";
+		status = "okay";
 };
 
 //fe280000
