@@ -9,12 +9,12 @@ env:
   REPO_URL: https://github.com/z901251/immortalwrt-rk356x
   REPO_BRANCH: master
   CONFIG_FILE: configs.config
-  DIY_SCRIPT: diy-mini.sh
+  DIY_SCRIPT: diy.sh
   CLASH_KERNEL: arm64
   CACHE_TOOLCHAIN: true
   UPLOAD_BIN_DIR: false
   FIRMWARE_RELEASE: true
-  FIRMWARE_TAG: openwrt-standard
+  FIRMWARE_TAG: immortalwrt-RK3568-NSY-G68
   TZ: Asia/Shanghai
   GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN }}
 
