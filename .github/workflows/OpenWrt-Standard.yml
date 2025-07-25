@@ -7,7 +7,7 @@ on:
 
 env:
   REPO_URL: https://github.com/z901251/immortalwrt-rk356x
-  REPO_BRANCH: master
+  REPO_BRANCH: main
   CONFIG_FILE: configs.config
   DIY_SCRIPT: diy.sh
   CLASH_KERNEL: arm64
