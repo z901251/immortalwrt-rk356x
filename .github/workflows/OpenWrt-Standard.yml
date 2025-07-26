@@ -4,7 +4,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 20 * * *"
-
 env:
   REPO_URL: https://github.com/z901251/immortalwrt-rk356x
   REPO_BRANCH: main
@@ -72,7 +71,7 @@ jobs:
         fi
 
         - name: Install Dependencies
-      run: |
+     
         echo "=== 开始安装OpenWrt编译依赖 ==="
         sudo apt-get update -y
         
