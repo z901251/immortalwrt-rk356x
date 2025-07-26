@@ -32,7 +32,7 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4  # 更新到最新版本
+      uses: actions/checkout@v3  # 更新到最新版本
 
     - name: Check Server Performance
       run: |
