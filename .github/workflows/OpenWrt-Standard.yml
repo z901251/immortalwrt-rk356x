@@ -1,6 +1,6 @@
-name: OpenWrt Standard (Fixed)
+name: OpenWrt Standard (Fully Fixed)
 
-on: 
+on:
   workflow_dispatch:
   schedule:
     - cron: "0 20 * * *"
@@ -36,105 +36,332 @@ jobs:
 
     - name: Check Server Performance
       run: |
-        echo "注意：GitHub Actions服务器性能有限"
-        echo "物理核心数: $(grep "cpu cores" /proc/cpuinfo | uniq | awk '{print $4}')"
-        echo "逻辑核心数: $(nproc)"
+        echo "⚠ GitHub Actions服务器性能有限 - 编译大型固件可能需要4+小时"
+        echo "------------------------[系统信息]------------------------"
+        echo "CPU物理核心: $(grep "cpu cores" /proc/cpuinfo | uniq | awk '{print $4}')"
+        echo "CPU逻辑核心: $(nproc)"
+        echo "CPU型号: $(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | sed 's/^ *//')"
+        echo "可用内存: $(free -h | awk '/Mem/{print $4}')"
+        echo "------------------------[磁盘空间]------------------------"
+        df -hT
         
-    # 修复1: 使用新的磁盘清理工具
-    - name: Release Space
-      uses: marvinpinto/action-free-disk-space@v1.2.0
-      with:
-        free-up: 20  # 释放20GB空间
-        additional-paths: |
-          /usr/local/lib/android
-          /usr/share/dotnet
-          
-    # 修复2: 简化环境初始化
-    - name: Initialization Environment
+    - name: Free Disk Space (Optimized for OpenWrt)
       run: |
-        sudo apt-get update
-        sudo apt-get install -y $(curl -fsSL https://git.io/JLZ6A) # OpenWrt专用依赖脚本
-        sudo timedatectl set-timezone "$TZ"
+        echo "开始清理磁盘空间..."
+        # 删除不需要的大文件
+        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache
+        sudo rm -rf /usr/local/graalvm /usr/local/phantomjs /usr/local/flutter
+        sudo rm -rf /usr/local/bin/packer /usr/local/lib/node_modules
+        sudo rm -rf /imagegeneration /opt/az /opt/microsoft /usr/share/swift
         
+        # 清理系统缓存
+        sudo apt-get autoremove -y --purge
+        sudo apt-get clean
+        sudo docker system prune -a -f --volumes
+        sudo journalctl --vacuum-time=1d
+        
+        echo "清理后磁盘空间："
+        df -hT
+        
+        # 检查是否达到最小空间要求
+        MIN_FREE_GB=15
+        free_gb=$(df -m . | awk 'NR==2 {print int($4/1024)}')
+        if [ "$free_gb" -lt "$MIN_FREE_GB" ]; then
+          echo "::error::磁盘空间不足${MIN_FREE_GB}GB，无法编译OpenWrt！"
+          exit 1
+        fi
+
+    - name: Install Dependencies
+      run: |
+        echo "安装OpenWrt编译依赖..."
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential clang flex g++ gawk gcc-multilib gettext git \
+          libncurses5-dev libssl-dev python3 python3-distutils rsync \
+          unzip zlib1g-dev file wget time libelf-dev ccache binutils bison \
+          gperf curl lzma bc upx p7zip-full u-boot-tools kmod cpio
+        echo "依赖安装完成"
+        
+        # 设置时间
+        sudo timedatectl set-timezone "$TZ"
+
+    - name: Setup Work Directory
+      run: |
+        echo "创建工作目录..."
+        sudo mkdir -p /mnt/workdir
+        sudo chown -R $USER:$USER /mnt/workdir
+        mkdir -p /mnt/workdir/openwrt
+        echo "OPENWRT_PATH=/mnt/workdir/openwrt" >> $GITHUB_ENV
+
+    - name: Validate Repository
+      run: |
+        echo "验证仓库可用性..."
+        if ! git ls-remote --heads "$REPO_URL" "$REPO_BRANCH" >/dev/null; then
+          echo "::error::分支 '$REPO_BRANCH' 在仓库 '$REPO_URL' 中不存在！"
+          exit 1
+        fi
+        echo "仓库验证通过"
+
     - name: Clone Source Code
       working-directory: /mnt/workdir
       id: clone
       run: |
-        git clone "$REPO_URL" -b "$REPO_BRANCH" openwrt --depth=1
-        echo "OPENWRT_PATH=${PWD}/openwrt" >> $GITHUB_ENV
+        echo "克隆源码仓库..."
+        git config --global http.postBuffer 524288000  # 增大缓冲区大小
+        git clone "$REPO_URL" -b "$REPO_BRANCH" openwrt --depth=1 --no-single-branch
         
-    # 修复3: 添加路径安全校验
-    - name: Validate Paths
+        cd openwrt
+        echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
+        
+        # 获取提交信息
+        COMMIT_AUTHOR=$(git log -1 --format="%an")
+        COMMIT_DATE=$(git log -1 --format="%cd" --date=format:'%Y-%m-%d %H:%M:%S')
+        COMMIT_MESSAGE=$(git log -1 --format="%s")
+        COMMIT_HASH=$(git log -1 --format="%H")
+        
+        echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV
+        echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_ENV
+        echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_ENV
+        echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
+        echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
+        echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_OUTPUT
+        echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
+        echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_OUTPUT
+        
+        echo "✅ 克隆完成：$COMMIT_HASH ($COMMIT_DATE)"
+
+    - name: Generate Build Variables
+      id: variable
       run: |
-        if [ ! -f "$CONFIG_FILE" ]; then
-          echo "错误: 缺少配置文件 $CONFIG_FILE" 1>&2
+        echo "配置编译变量..."
+        cd "$OPENWRT_PATH"
+        
+        # 检查配置文件
+        if [ ! -f "$GITHUB_WORKSPACE/$CONFIG_FILE" ]; then
+          echo "::error::配置文件 $CONFIG_FILE 未找到！"
           exit 1
         fi
         
-        if [ ! -f "$DIY_SCRIPT" ]; then
-          echo "警告: 缺少DIY脚本 $DIY_SCRIPT"
-        fi
-        
-    # 修复4: 修复文件移动逻辑
-    - name: Load Custom Configuration
-      run: |
         # 复制配置文件
-        cp -f "${{ github.workspace }}/$CONFIG_FILE" "$OPENWRT_PATH/.config"
+        cp -fv "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
+        make defconfig
         
-        # 仅当存在时才复制files目录
-        if [ -d "${{ github.workspace }}/files" ]; then
-          cp -r "${{ github.workspace }}/files" "$OPENWRT_PATH/"
-        fi
+        # 获取目标设备信息
+        DEVICE_TARGET=$(grep 'CONFIG_TARGET_BOARD=' .config | awk -F '"' '{print $2}' || echo 'unknown')
+        DEVICE_SUBTARGET=$(grep 'CONFIG_TARGET_SUBTARGET=' .config | awk -F '"' '{print $2}' || echo 'unknown')
         
-        # 设置脚本权限
-        find "${{ github.workspace }}/scripts" -type f -exec chmod +x {} \;
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_OUTPUT
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_OUTPUT
         
-        # 执行DIY脚本（如果存在）
-        if [ -f "${{ github.workspace }}/$DIY_SCRIPT" ]; then
-          cd "${{ github.workspace }}"
-          "./$DIY_SCRIPT"
-        fi
-        
-        # 返回编译目录
-        cd "$OPENWRT_PATH"
-        
-    # 修复5: 添加工具链缓存修复
+        echo "✅ 目标设备: $DEVICE_TARGET/$DEVICE_SUBTARGET"
+
     - name: Cache Toolchain
       if: env.CACHE_TOOLCHAIN == 'true'
       uses: actions/cache@v3
       with:
-        key: ${{ runner.os }}-openwrt-toolchain-${{ env.REPO_BRANCH }}
         path: |
           ${{ env.OPENWRT_PATH }}/dl
-          ${{ env.OPENWRT_PATH }}/build_dir/host
-          
-    # 修复6: 编译优化
+          ${{ env.OPENWRT_PATH }}/staging_dir
+          ${{ env.OPENWRT_PATH }}/build_dir
+        key: ${{ runner.os }}-openwrt-toolchain-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ github.run_id }}
+
+    - name: Install Feeds
+      run: |
+        echo "更新软件源..."
+        cd "$OPENWRT_PATH"
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        echo "✅ 软件源更新完成"
+
+    - name: Apply Custom Configuration
+      run: |
+        echo "应用自定义配置..."
+        cd "$OPENWRT_PATH"
+        
+        # 应用自定义配置文件
+        if [ -f "$GITHUB_WORKSPACE/$CONFIG_FILE" ]; then
+          cp -fv "$GITHUB_WORKSPACE/$CONFIG_FILE" .config
+          make defconfig
+        fi
+        
+        # 复制自定义文件
+        if [ -d "$GITHUB_WORKSPACE/files" ]; then
+          cp -rv "$GITHUB_WORKSPACE/files" ./
+          echo "复制自定义files目录"
+        fi
+        
+        # 执行DIY脚本
+        if [ -f "$GITHUB_WORKSPACE/$DIY_SCRIPT" ]; then
+          echo "执行DIY脚本: $DIY_SCRIPT"
+          chmod +x "$GITHUB_WORKSPACE/$DIY_SCRIPT"
+          cd "$GITHUB_WORKSPACE"
+          "./$DIY_SCRIPT"
+          cd "$OPENWRT_PATH"
+        fi
+        
+        # 执行预设脚本
+        if [ -f "$GITHUB_WORKSPACE/scripts/preset-clash-core.sh" ]; then
+          echo "执行Clash核心脚本"
+          chmod +x "$GITHUB_WORKSPACE/scripts/preset-clash-core.sh"
+          "$GITHUB_WORKSPACE/scripts/preset-clash-core.sh" "$CLASH_KERNEL"
+        fi
+        
+        if [ -f "$GITHUB_WORKSPACE/scripts/preset-adguard-core.sh" ]; then
+          echo "执行AdGuard核心脚本"
+          chmod +x "$GITHUB_WORKSPACE/scripts/preset-adguard-core.sh"
+          "$GITHUB_WORKSPACE/scripts/preset-adguard-core.sh" "$CLASH_KERNEL"
+        fi
+        
+        echo "✅ 自定义配置应用完成"
+
+    - name: Download Packages
+      run: |
+        echo "下载依赖包..."
+        cd "$OPENWRT_PATH"
+        make download -j$(nproc)
+        
+        # 清理无效的小文件
+        find dl -size -1k -delete
+        
+        echo "✅ 依赖包下载完成"
+        df -hT
+
     - name: Compile Firmware
       id: compile
+      timeout-minutes: 240  # 设置4小时超时
       run: |
+        echo "开始编译固件..."
         cd "$OPENWRT_PATH"
-        make download -j$(nproc) # 并行下载
         
-        # 三级编译回退
-        make -j$(nproc) V=sc || make -j2 V=s || make -j1 V=s
+        # 准备编译环境
+        mkdir -p files/etc/uci-defaults
+        if [ -f "$GITHUB_WORKSPACE/scripts/init-settings.sh" ]; then
+          cp "$GITHUB_WORKSPACE/scripts/init-settings.sh" files/etc/uci-defaults/99-init-settings
+        fi
+        
+        # 设置时间戳
+        BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S")
+        echo "构建版本: $BUILD_DATE"
+        echo "FILE_DATE=$(date +'%Y.%m.%d')" >> $GITHUB_ENV
+        echo "TAG_DATE=$(date +'%Y.%m.%d-%H.%M')" >> $GITHUB_ENV
+        
+        # 三阶段编译（自适应性能）
+        if ! make -j$(($(nproc)+1)) V=s; then
+          echo "::warning::首次编译失败，尝试降级编译..."
+          if ! make -j2 V=s; then
+            echo "::warning::降级编译失败，尝试单核详细编译..."
+            make -j1 V=s || { 
+              echo "::error::所有编译尝试均失败！";
+              exit 1;
+            }
+          fi
+        fi
         
         echo "status=success" >> $GITHUB_OUTPUT
+        echo "✅ 固件编译成功!"
+        df -hT
+
+    - name: Modify Uboot Image
+      if: steps.compile.outputs.status == 'success'
+      run: |
+        echo "处理uboot镜像..."
+        cd "$OPENWRT_PATH/bin/targets/rockchip/armv8"
         
-    # 修复7: 升级上传组件
-    - name: Upload Bin Directory
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-      uses: actions/upload-artifact@v4  # 使用最新版本
+        if [ -f "$GITHUB_WORKSPACE/scripts/modify-uboot-image.sh" ]; then
+          chmod +x "$GITHUB_WORKSPACE/scripts/modify-uboot-image.sh"
+          "$GITHUB_WORKSPACE/scripts/modify-uboot-image.sh"
+          echo "✅ uboot镜像修改完成"
+        else
+          echo "⚠ 未找到uboot修改脚本，跳过此步骤"
+        fi
+
+    - name: Organize Firmware Files
+      if: steps.compile.outputs.status == 'success'
+      run: |
+        echo "整理固件文件..."
+        cd "$OPENWRT_PATH/bin/targets"/*/*
+        
+        # 检查文件完整性
+        if [ ! -f sha256sums ]; then
+          echo "::error::缺少sha256校验文件，编译可能失败"
+          exit 1
+        fi
+        
+        # 获取内核版本
+        KERNEL_VER=$(grep '^kernel' *.manifest | head -1 | cut -d- -f2 | tr -d ' ' || echo 'unknown')
+        echo "KERNEL=$KERNEL_VER" >> $GITHUB_ENV
+        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+        
+        # 准备文件
+        mkdir -p packages
+        mv -f "$OPENWRT_PATH/bin/packages"/*/*/*.ipk packages/ || true
+        tar -zcf Packages.tar.gz packages
+        cp "$OPENWRT_PATH/.config" build.config
+        rm -rf packages feeds.buildinfo version.buildinfo
+        
+        echo "✅ 文件整理完成"
+        ls -lh
+
+    - name: Upload Firmware To Artifact (Temp)
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
+      uses: actions/upload-artifact@v4
       with:
-        name: immortalwrt-build-${{ env.FILE_DATE }}
-        path: ${{ env.OPENWRT_PATH }}/bin
-        retention-days: 7
-        
-    # 修复8: 统一上传机制
+        name: ${{ env.FIRMWARE_TAG }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
+        path: ${{ env.FIRMWARE_PATH }}/*
+        retention-days: 3
+
     - name: Upload Firmware To Release
       if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: ${{ env.FIRMWARE_TAG }}-${{ github.run_id }}
-        files: ${{ env.OPENWRT_PATH }}/bin/targets/*/*
-        draft: false
-        prerelease: false
+        name: ${{ env.FIRMWARE_TAG }} Build ${{ env.TAG_DATE }}
+        tag: v${{ env.TAG_DATE }}-${{ env.FIRMWARE_TAG }}
+        token: ${{ env.GITHUB_TOKEN }}
+        files: ${{ env.FIRMWARE_PATH }}/*
+        body: |
+          **OpenWrt固件 - ${{ env.FIRMWARE_TAG }}**
+          
+          ### 🔧 设备信息
+          - **平台**: ${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
+          - **内核版本**: ${{ env.KERNEL }}
+          - **默认地址**: 192.168.1.1
+          - **默认密码**: password
+          
+          ### 🔗 源码信息
+          - **仓库**: [${{ env.REPO_URL }}](${{ env.REPO_URL }})
+          - **分支**: ${{ env.REPO_BRANCH }}
+          - **提交**: [${{ env.COMMIT_HASH }}](${{ env.REPO_URL }}/commit/${{ env.COMMIT_HASH }})
+          - **编译时间**: ${{ env.TAG_DATE }}
+          
+          ### 📜 变更信息
+          - **提交者**: ${{ env.COMMIT_AUTHOR }}
+          - **提交时间**: ${{ env.COMMIT_DATE }}
+          - **提交信息**: ${{ env.COMMIT_MESSAGE }}
+          
+          ### ⬇️ 下载说明
+          固件文件名通常包含设备型号和日期。选择与您设备匹配的文件刷入。
+
+    - name: Upload Bin Directory
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.FIRMWARE_TAG }}-build-binaries
+        path: ${{ env.OPENWRT_PATH }}/bin
+        retention-days: 3
+
+    - name: Notify Success
+      if: success()
+      run: |
+        echo "🎉 固件编译成功！"
+        echo "固件版本: ${{ env.FIRMWARE_TAG }}-${{ env.TAG_DATE }}"
+        echo "下载地址: https://github.com/${{ github.repository }}/releases/tag/v${{ env.TAG_DATE }}-${{ env.FIRMWARE_TAG }}"
+
+    - name: Notify Failure
+      if: failure()
+      run: |
+        echo "::error::固件编译失败！"
+        echo "请检查日志中错误信息"
+        echo "工作流运行ID: ${{ github.run_id }}"
+        echo "触发者: ${{ github.actor }}"
