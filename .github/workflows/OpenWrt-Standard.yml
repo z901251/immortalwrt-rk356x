@@ -69,9 +69,7 @@ jobs:
           echo "::error::磁盘空间不足${MIN_FREE_GB}GB，无法编译OpenWrt！"
           exit 1
         fi
-
-        - name: Install Dependencies
-      run: |
+         - name: Install Dependencie
         echo "=== 开始安装OpenWrt编译依赖 ==="
         sudo apt-get update -y
         
