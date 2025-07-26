@@ -81,7 +81,6 @@ jobs:
           unzip zlib1g-dev file wget time libelf-dev ccache binutils bison \
           gperf curl lzma bc upx p7zip-full u-boot-tools kmod cpio
            - name: Install Critical Python Dependencies
-      run: |
         sudo apt-get install -y python3-pyelftools python3-setuptools
         pip3 install pyelftools --upgrade
         echo "依赖安装完成"
